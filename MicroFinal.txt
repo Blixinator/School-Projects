@@ -1,0 +1,600 @@
+*-----------------------------------------------------------*
+***************READ BEFORE USING PROGRAM*********************
+*-----------------------------------------------------------*
+*This program uses components other than the trainer board
+*and must be set up in order to fully use.
+**********
+*Connect a wire from the PA6 port on the trainer board to the
+*breadboard. From the breadboard node, connect a 330 ohm
+*resistor to limit current to the LED. Connect an LED to the
+*other end of the resistor and then tie the LED to ground.
+**********
+*In order to make sound, a simple buzzer could be hooked up to
+*PA6, but one was not available during the design of this
+*project, so a logic probe was used instead. Connect the
+*positive(red) clip of the probe to PA6 before the resistor and
+*the negative(black) clip to ground. Then connect the tip of the
+*logic probe to VCC using a wire connected to the VCC port and
+*then wrapped around the tip of the probe. This causes the
+*probe to turn on and read HIGH whenever the alarm turns on
+**********
+
+
+
+
+****SYMBOL DEFINITIONS****
+
+KFLAG   EQU     9800    	Keyboard Flag Location (Bit 0)
+KOUT    EQU     9801    	Terminal output location
+
+LCD     EQU     $1401
+LIGHTS  EQU     $1404   	Location of the LEDs
+REG     EQU     $1000
+PORTA   EQU     $1000
+TOC2    EQU     $1018           Timer Output Compare 2
+TCTL1   EQU     $1020
+TMSK1   EQU     $1022
+TFLG1   EQU     $1023		Bit 6 is OC2F
+TMSK2   EQU     $1024
+TFLG2   EQU     $1025
+PACTL   EQU     $1026
+PIOC    EQU     $1002
+DDRC    EQU     $1007
+PORTC   EQU     $1403
+PORTCL  EQU     $1005
+
+TCNT    EQU     $100E
+
+DIP     EQU     $1403
+
+LCDINI  EQU     $FF70
+LCDLIN1 EQU     $FF73
+LCDLIN2 EQU     $FF76
+
+
+****MASKS****
+BIT6    EQU     %01000000
+BIT7    EQU     %10000000
+OC2F    EQU     %01000000
+
+
+****DATA SECTION****
+
+	ORG     $00DC           Interrupt vector for output compare 2
+	JMP     OC2ISR
+
+  	ORG     $0000
+MERID   FCB     0
+HOURS   FCB     12
+MINUTES FCB     54
+SECONDS FCB     55
+COUNT 	FCB     0
+
+NSEC    FCB     60              Number of seconds in a minute
+NMIN    FCB     60              Number of minutes in an hour
+NHOUR   FCB     12              Number of hours in half of a day
+
+ALMMRD  FCB     0               Meridian time of the alarm
+ALMMIN  FCB    	55              Minute of the alarm
+ALMHR   FCB     12              Hour of the alarm
+
+SNZTME  FCB     2               Number of minutes the snooze delays the alarm
+ALRMON  FCB     0               Variable stating whether or not the alarm is on($00=no $FF=yes)
+SNOOZED FCB     $FF             Variable stating whether or not the alarm is snoozed($00=no $FF=yes)
+SNZPAT  FCB     17              Starting snooze pattern
+OFFPAT  FCB     00              Variable holding the pattern to turn off the alarm
+OFFTME  FCB     20              Time the user has to enter 3 numbers to turn off the alarm
+
+TRYOFF  FCB     $00             States whether or not user is currently trying to turn off the alarm($00=no $FF=yes)
+
+ELAPSEC FCB     0               Number of seconds that have passed since user started trying to turn off the alarm
+
+NENTERD FCB     0               Number of patterns user has successfully entered to turn off the alarm
+
+OUTPUT  FCC     '11:54:55 AM     '      LCD output message
+LINE2   FCC     '                '
+
+***MAIN PROGRAM****
+	ORG     $C100
+
+	LDAA    #$03      	Should set frequency of clock
+	STAA    TMSK2
+
+	LDAA    #$00
+	STAA    LIGHTS          Turn off the LEDs
+
+	LDS     #$CFFF  	Set the stack
+
+	LDAA    #%01000000	Allow OC2 interrupts
+	STAA    TMSK1
+
+	LDD    #$00FF           Output compare 2 register. Arbitrary number
+	STD    TOC2
+	
+	LDAA    #$00
+	STAA    PORTA
+
+	JSR     LCDINI          Set up the LCD display
+
+        CLI                     Turns on interrupts
+
+*********Infinite Loop*
+
+HERE
+
+
+*****Check for push button pressed.
+*****If pressed, display 3 numbers for user to plug into dip switch to deactivate
+**
+*
+
+	LDAA    TRYOFF
+	BNE     NOTTRY          Branch if already trying to turn off alarm
+	LDAA    SNOOZED
+	CMPA    #$FF
+	BNE     THERE           Branch if the alarm is not snoozed
+
+	LDAA    PORTA           Determine whether or not PA0 pushbutton was pressed
+	ANDA    #$01
+	EORA    #$01
+	CMPA    #$01
+	BNE     NOTOFF          Branch if not trying to turn off alarm
+	LDAA    #$FF
+	STAA    TRYOFF          Signify that you are trying to turn off the alarm
+
+	LDAA    TCNT            Set the first of 3 numbers the user needs to enter
+	STAA    OFFPAT
+	STAA    LIGHTS          Display the current off pattern to the LEDs
+
+
+NOTOVER
+
+NOTTRY
+*****Do the 3 binary number test here
+**
+*
+	LDAA    DIP             Load the A accumulator with the current pattern of the DIP switches
+	CMPA    OFFPAT          Compare the dip switch positions to the current off pattern
+	BNE     NOTSAME         Branch if the dip switch != off pattern
+	LDAA    NENTERD         Load A with the number of patterns entered
+	INCA                    Increment A
+	STAA    NENTERD         Store the incremented value to A
+	CMPA    #03             See if 3 numbers have been entered
+	BNE     NOTCLR          Branch if 3 numbers have not been entered
+	LDAA    #00             If 3 numbers entered, clear everything
+	STAA    LIGHTS          Clear the lights
+	STAA    ALRMON          Set the status of the alarm to OFF
+	LDAA    PORTA           Load PORTA
+	ANDA    #%10111111      Force PA6 to go low. No longer outputting current
+	STAA    PORTA           Store PORTA
+	STAA    SNOOZED         Set the status of the snooze to OFF
+	STAA    NENTERD         Set the number of patterns entered to 0
+	STAA    TRYOFF          Set the status of trying to turn off the alarm to OFF
+	STAA    ELAPSEC         Set the number of elapsed seconds since trying to turn off alarm to 0
+	STAA    OFFPAT          Set the off pattern to 0
+	LDAA    #32             Load A with the ASCII value of the SPACE character
+	LDX     #OUTPUT         Load X with the memory location of the first LCD output
+	STAA    13,X            Clear the last 3 positions of the first line on the LCD screen
+	STAA    14,X
+	STAA    15,X
+	JSR     LCDLIN1
+	LDAA    #32             Load A with the ASCII value of the SPACE character
+	LDX     #LINE2          Load X with the memory location of the second LCD output
+	STAA    14,X            Clear the last 2 positions of the second LCD line
+	STAA    15,X
+	JSR     LCDLIN2
+
+	JMP 	HERE            Jump to the beginning of the infinite loop
+
+
+NOTCLR				;Branch to here if 3 off patterns have not been entered
+
+	LDAA    TCNT            Load A with the current value of the free running counter (Essentially Random)
+	STAA    OFFPAT          Store A to be the next off pattern
+	STAA    LIGHTS          Display the off pattern on the LEDs
+
+NOTSAME                         ;Branch to here if the dip switch != off pattern
+
+NOTOFF                          ;Branch to here if not trying to turn off alarm
+THERE                           ;Branch to here if the alarm is not snoozed
+
+*
+**
+***
+
+	LDAA    ALRMON         	Check if alarm is on
+	CMPA    #$FF
+	BNE     NOALRM		Branch if alarm is not on
+	LDAA    DIP
+	CMPA    SNZPAT          Compare the DIP switch to the proper switch sequence
+	BNE     NOTSNZD         Branch if alarm is on and snooze is not set
+	LDAA    TRYOFF          Load A with the status of trying to turn off the alarm
+	CMPA    #$00
+	BEQ     SKIP            Skip the jump if the user is not trying to turn off the alarm
+	JMP     TEMP2		Jump to TEMP2 if the user is trying to turn off the alarm
+SKIP
+
+********Reach here if alarm is on and snooze is set to proper value
+	LDAA    TCNT           	Load A with the current value of the free running counter
+	STAA    SNZPAT          Store A to be the next snooze pattern
+
+*****Change the snooze time to current time + snooze delay
+**
+*
+	LDAA    #$00            Load A with zero to set conditional variables
+	STAA    ALRMON          Since you have snoozed the alarm, the alarm is no longer on
+	STAA    LIGHTS          Clear the LEDs
+	LDAA    PORTA           Load PORTA
+	ANDA    #%10111111      Force PA6 to go low. No longer outputting current
+	STAA    PORTA           Store PORTA
+
+	LDAA    #$FF            Load A with $FF to set conditional variables
+	STAA    SNOOZED         Set SNOOZED to $FF to signify that the alarm is snoozed
+
+
+
+	LDAA    #32             Load A with the ASCII value of SPACE character
+	LDX     #OUTPUT         Load X with the memory adress of the first LCD line output
+	STAA    13,X            Clear the last 3 spots of the first LCD line
+	STAA    14,X
+	STAA    15,X
+
+
+***Set the alarm time values to the current time values
+**
+*
+	LDAA    MINUTES
+	STAA    ALMMIN
+	LDAA    HOURS
+	STAA    ALMHR
+	LDAA    MERID
+	STAA    ALMMRD
+*
+**
+***
+
+*Test for alarm minute overflow
+	LDAA    ALMMIN          Load A with the alarm minute time
+	ADDA    SNZTME          Add the snooze delay the the alarm minute time
+	STAA    ALMMIN          Store the new alarm minute time
+	CMPA    #60             Compare the new alarm minute time to the number of minutes in an hour
+	BLO     NOMINCY         Branch if there is no minute carry
+	SUBA    #60             If there is a minute carry, subtract the number of an hour from the alarm minute time
+	STAA    ALMMIN          Store the new value into the alarm minute time
+	LDAA    ALMHR           Since there was minute carry, need to increment the alarm hour time
+	INCA                    Increment the alarm hour time
+	STAA    ALMHR           Store the alarm hour time
+
+
+
+*Test for alarm meridian change
+	LDAA    ALMHR           Load A with the alarm hour time
+	CMPA    #12             Compare A to the number of hours in a half-day
+	BNE     NOMEDCY         Branch if there was no meridian carry
+	LDAA    ALMMRD          If there was meridian carry, toggle the alarm meridian
+	EORA    #$01            XOR the alarm meridian to toggle it
+	STAA    ALMMRD          Store the alarm meridian
+
+NOMEDCY                         ;Branch to here if there was no meridian overflow
+
+
+*Test for alarm hour overflow
+	LDAA    ALMHR           Hour overflow does not pair with meridian overflow, needs seperate check
+	CMPA    #13             Compare the alarm hour time to (number of hours in a day + 1)
+	BNE     NOHRCY          Branch if there is no alarm hour overflow
+	LDAA    #1              If there is overflow, set the alarm hour time to 1
+	STAA    ALMHR           Store the alarm hour time
+NOHRCY                          ;Branch to here if there was no hour overflow
+
+NOMINCY                         ;Branch to here if there was no minute overflow
+
+*
+**
+****************
+
+NOTSNZD                         ;Branch to here if alarm is on and snooze is not set
+NOALRM                          ;Branch to here if alarm is not on
+TEMP2                           ;Jump to here if the user is trying to turn off the alarm
+
+	JMP     HERE            ;Jump back to the beginning of the infinite loop
+
+*************
+
+****Interrupt Service Routine****
+OC2ISR  LDX     #REG            Test for illegal interrupts
+
+	BRSET   TFLG1-REG,X,OC2F, SKIP3         Skip over the jump if the OC2F flag is set
+	JMP     RTOC2                           Jump to the end of the ISR
+SKIP3
+
+	PSHA                    Push A onto the stack
+
+	LDAA    #OC2F		Clear OC2 flag
+	STAA    TFLG1           Clear OC2 flag
+
+	LDD     TOC2    	Increment Output Compare 2 by 20000
+	ADDD    #20000 		This makes TOC2 = Free running counter every 10ms
+	STD     TOC2            Store TOC2
+
+
+
+****Increment the counter****
+	LDAA    COUNT           Increment the counter, set to 0 when 1 second is reached
+	INCA
+	CMPA    #100            Number of interrupts in 1 second
+	BEQ     SKIP4           Skip the jump if not yet one second
+	JMP     NOTYET          Jump to NOTYET
+SKIP4
+	LDAA    #0              Reset COUNT
+	STAA    COUNT
+	
+*Add 1 to seconds, pulse alarm
+	LDAA    ALRMON          Determine if the alarm is on
+	BEQ     NOPULS          Don't pulse the alarm if the alarm is not on
+	LDAA    PORTA           Load PORTA
+	EORA    #%01000000      Toggle Bit 6 of PORTA. This is the bit that sends voltage to the alarm
+	STAA    PORTA           Store PORTA
+NOPULS                          ;Branch to here if the alarm is not on
+	LDAA    TRYOFF          Load A with whether or not the user is trying to turn off the alarm($00=no $FF=yes)
+	CMPA    #$FF            Test whether or not the user is trying to turn off the alarm
+	BNE     NOT             Branch if the user is not trying to turn off the alarm
+	LDAA    ELAPSEC         If the user is trying to turn off the alarm, increment the number of seconds that has passed
+	INCA                    Increment the number of seconds since the user started trying to turn off the alarm
+	CMPA    OFFTME          Number of seconds you have to try to turn off the alarm
+	BNE     NOTDONE         If 15 seconds passed, reset all variables dealing with reseting the alarm
+	LDAA    #$00            Load A with 0
+	STAA    ELAPSEC         Set the number of elaplsed seconds to 0
+	STAA    TRYOFF          Set the status of whether or not the user is trying to turn off the alarm to FALSE
+	STAA    NENTERD         Set the number of patterns entered to 0
+	STAA    LIGHTS          Clear the lights
+
+NOTDONE
+	STAA    ELAPSEC         Store the elapsed seconds
+	JSR     TOASCII         Convert the value of A to 2 ASCII values passed back in A and B
+	LDX     #LINE2          Load X with the adress of the LCD line 2 output
+	STAA    14,X            Store the first digit to the second to last position on the second line
+	STAB    15,X            Store the last digit to the last posisition of the second line
+	JSR     LCDLIN2
+
+NOT                             ;Branch to here if the user is not trying to turn off the alarm
+	LDAA    SECONDS         Increment the number of seconds, reset when 1 minute is reached
+	INCA
+	CMPA    NSEC            Number of seconds in a minute
+	BNE     NOTSEC          Branch if one minute has not passed
+	LDAA    #0              Reset the seconds if one minute has passed
+	STAA    SECONDS         Store seconds
+*Add 1 to minutes
+	LDAA    MINUTES         Increment the minutes, reset when 1 hour is reached
+	INCA
+	CMPA    NMIN            Number of minutes in an hour
+	BNE     NOTMIN          Branch if one hour has not passed
+	LDAA    #0              Reset the minutes if one hour has passed
+	STAA    MINUTES         Store minutes
+*Add 1 to hours
+	LDAA    HOURS           Increment the hours, reset when 12 hours is reached
+	INCA
+*********Test for AM/PM
+**
+*
+	CMPA    #12             Compare A to the number of hours in a day
+	BNE     DONTFLIP        Branch if a meridian change has not occured
+	PSHA                    Push A
+	LDAA    MERID           Load A with the meridian (AM = 0, PM = 1)
+	EORA    #$01            XOR A with %1 to toggle the last bit
+	STAA    MERID           Store the meridian
+	PULA                    Pull A
+DONTFLIP                        ;Branch to here if a meridian change has not occured
+	PSHA                    Push A
+	LDX     #OUTPUT         Load X with the adress of LCD line1 output
+	LDAA    MERID           Load A with the current meridian value
+	CMPA    #$01            Compare the meridian value to 1 (Test if it is PM time)
+	BEQ     PM              Branch if it is PM
+	LDAA    #65             Reach here if AM. Load A with the ASCII value of "A"
+	STAA    9,X             Store A to the location of "Z" in "ZM"
+	BRA     OUT4            Skip over the PM section
+PM      LDAA    #80             Branch to here if PM. Load A with ASCII value of "P"
+	STAA    9,X             Store A to the location of "Z" in "ZM"
+OUT4                            ;Branch to here if PM
+*
+**
+*********Stop setting AM/PM
+
+	PULA                    Pull A
+	CMPA    #13             Compare to 13 since we use 12 as our hours = 0
+	BNE     NOTHOUR         Branch if there is no hour overflow
+	LDAA    #1              No such thing as 0 o clock, reset to 1 since 1 > 12
+	STAA    HOURS
+
+NOTHOUR STAA    HOURS           Branch to here if there was hour overflow. Store HOURS
+	BRA     CHNGHOUR        Branch to the section of code to change the hour section of the LCD
+
+NOTMIN  STAA    MINUTES         Branch to here if one hour did not pass. Store MINUTES
+	BRA     CHNGMIN         Branch to the section of code to change the minute section of the LCD
+
+NOTSEC  STAA    SECONDS         Branch to here if one minute did not pass. Store SECONDS
+	BRA     CHNGSEC         Branch to the section of code to change the second secdtion of the LCD
+
+NOTYET  STAA    COUNT           Branch to here if one second did not pass. Store COUNT
+	BRA     EXIT            Branch to the end of the ISR
+
+
+RTOC2                           ;Branch to here on illegal interrupt
+
+
+****Output the time****
+**** Put HOURS high and low in ascii in the correct memory location
+CHNGHOUR                        ;Branch to here if the hour section of the LCD needs to be updated. Will update minutes and seconds too
+
+	LDX     #OUTPUT         Set X to adress of LCD line 1 output
+	LDAA    HOURS           Load A with HOURS
+	JSR     TOASCII         Convert HOURS to 2 ASCII values stored in A and B
+	STAA    0,X             Store first digit of HOURS to LCD
+	STAB    1,X             Store second digit of HOURS to LCD
+
+	JSR     LCDLIN1         Set the LCD display
+
+
+**** Put minutes high and low in ascii in the correct memory location
+CHNGMIN
+ 	LDX     #OUTPUT         Set X to address of OUTPUT
+	LDAA    MINUTES         Load A with MINUTES
+	JSR     TOASCII         Convert MINUTES to 2 ASCII values stored in A and B
+	STAA    3,X             Store first digit of MINUTES to LCD
+	STAB    4,X             Store second digit of MINUTES to LCD
+
+	JSR     LCDLIN1         Set the LCD display
+
+*****Test if alarm time = current time*****
+**
+*
+	LDAA    MINUTES         Load A with the current minute time
+	LDAB    ALMMIN          Load B with the alarm minute time
+	CBA                     Compare B to A
+	BNE     T1              Branch if current minute time does not equal alarm minute time
+	LDAA    HOURS           Load A with the current hour time
+	LDAB    ALMHR           Load B with the alarm minute time
+	CBA                     Compare B to A
+	BNE     T1              Branch if current hour time does not equal alarm hour time
+	LDAA    MERID           Load A with current meridian
+	LDAB    ALMMRD          Load B with alarm meridian
+	CBA                     Compare B to A
+	BNE     T1              Branch if current meridian does not equal alarm meridian
+	
+***********Reach here only if alarm time is reached
+**
+*
+	LDAA    #$FF            Load A with FF to see if the alarm is snoozed
+	CMPA    SNOOZED         Compare A with the status of SNOOZED to determine if the alarm is snoozed
+	BNE     DONTGO          Branch if the alarm is not snoozed. Don't try to turn on alarm if it isn't scheduled to go on
+
+	LDAA    #$FF            Load A with $FF
+	STAA    ALRMON          Signify that the alarm is on by setting the ALRMON condition variable to $FF
+	LDAA    PORTA           Load A with PORTA
+	ORAA    #%01000000      Force PA6 high. Now outputting current
+	STAA    PORTA           Store PORTA
+
+
+	LDX     #OUTPUT         Load X with the adress of the LCD line 1 output
+	LDAA    SNZPAT          Load A with the current snooze pattern
+	JSR     TOASC2          Pass 3-digit number A. Return ASCII value of first digit in A and (A MOD 100) in B
+	STAA    13,X            Store the 3rd digit of the snooze pattern to the LCD line 1 output
+	TBA                     Transfer B to A (SNZPAT MOD 100)
+	JSR     TOASCII         Convert A to 2 ASCII values is A and B
+	STAA    14,X            Store 2nd digit of snooze pattern to the LCD line 1 output
+	STAB    15,X            Store 3rd digit of snooze pattern to the LCD line 1 output
+	JSR     LCDLIN1         Update the LCD line 1 display
+
+
+	LDAA    #$00            Load A with 0 to set the snooze conditional to FALSE
+	STAA    SNOOZED         Alarm is no longer snoozed if the alarm time is reached
+DONTGO                          ;Branch to here if the alarm is not snoozed
+
+*
+**
+*********************************
+T1                              ;Branch to here if the current time did not equal the alarm time
+
+
+
+
+*
+**
+****************************************
+
+**** Put seconds high and low in ascii in the correct memory location
+CHNGSEC LDX     #OUTPUT         Set X to address of OUTPUT
+	LDAA    SECONDS         Load A with SECONDS
+	JSR     TOASCII         Convert A to two ASCII values returned in A and B
+	STAA    6,X             Store first digit of SECONDS to the LCD line 1 output
+	STAB    7,X             Store second digit of SECONDS to the LCD line 1 output
+
+	JSR     LCDLIN1         Set the LCD display
+
+	LDAA    ALRMON          Load A with the alarm on conditional
+	CMPA    #$FF            Compare A to $FF (See if ALRMON is TRUE)
+	BNE     NOTBEEP         Branch if the alarm is not on
+
+NOTBEEP                         ;Branch to here if the alarm was not on
+
+EXIT    PULA                    Branch to here if the LCD did not need to be updated
+	RTI                     Return from interrupt
+
+	END
+
+
+
+
+************SUBROUTINES****************************
+
+*****Convert a 2-digit number to 2 ASCII codes*****
+*Number passed in A accumulator
+*ASCII for first digit is returned in A
+*ASCII for second digit is returned in B
+TOASCII
+	PSHX                    Push X
+	PSHA                    Push A
+LOOPY   CMPA    #10             Loop until A is less than 10
+	BLO     OUTY            Branch out of the loop
+	SUBA    #10             Subtract 10 from the passed value
+	BRA     LOOPY           Branch back to the beginning of the
+OUTY                            ;Branch to here when A is less than 10
+
+	TAB                     B and A hold binary of 2nd digit
+	PULA                    A holds binary of original number
+	PSHB                    Store binary of 2nd digit
+	SBA                     (A-B->A) A holds tens place of original number
+	TAB                     B holds tens place of original number
+	LDAA    #00             Set A to 00, this completes setup of D accumulator
+	LDX     #10             Load X with 10
+
+	IDIV                    Integer divide  D/X -> X
+	XGDX                    Swap X and D
+ 	TBA                     Transfer B to A (Left 8 bits of D to right 8 bits of D)
+ 	PULB                    Pull B
+ 	PULX                    Pull X
+
+	ADDA    #$30            Convert A to an ASCII value
+	ADDB    #$30            Convert B to an ASCII value
+
+	RTS                     Return from the subroutine
+*******************************************
+*******************************************
+
+
+***********ATTEMPT TO CONVERT 3-DIGIT NUMBER TO 3 ASCII VALUES
+*****Takes in 3 digit number in A, returns ASCII of first digit in A and (A MOD 100) in B
+TOASC2
+	PSHX                    Push X
+	PSHA                    Push A
+
+LOOP1   CMPA    #100            Loop until A is less than 100
+	BLO     OUT1            Branch out of the loop
+	SUBA    #100            Subtract 100 from the passed value
+	BRA     LOOP1           Branch back to the start of the loop
+OUT1                            ;Branch to here when A is less than 100
+
+	TAB                     B and A hold binary of 3rd digit
+	PULA                    A holds binary of original number
+	PSHB                    Push
+	SBA                     Subtract B from A (A-B->A)
+	TAB                     Transfer A to B (A->B)
+	LDAA    #00             Set A to 00, this completes setup of D accumulator
+	LDX     #100            Load X with 10
+
+	IDIV                    Integer divide  D/X -> X
+	XGDX                    Swap X and D
+ 	TBA                     Transfer B to A (Left 8 bits of D to right 8 bits of D)
+
+ 	PULB                    Pull B
+ 	PULX                    Pull X
+
+ 	ADDA    #$30            Convert A to ASCII
+
+*A holds the ASCII value of the first digit.
+*B holds Original number % 100
+*TBA and call TOASCII to convert the last 2 digits
+
+	RTS                     Return from the subroutine
+
+	END
+
